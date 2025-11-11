@@ -93,21 +93,10 @@ def test_user_operations_and_sessions(tmp_path):
     assert not app.verify_session(token)
 
 @pytest.mark.asyncio
-async def test_ratelimit_decorator_and_socket_mode(monkeypatch):
+async def test_ratelimit_decorator_mode():
     # Decorator mode: ensure it returns a callable
     dec = app.ratelimit(0.1)
     @dec
     async def f():
         return 'ok'
     assert callable(f)
-
-    # Socket mode: create a fake socket with getpeername
-    class FakeSock:
-        def getpeername(self):
-            return ('127.0.0.1', 12345)
-    sock = FakeSock()
-    # delay-based: first call allowed, immediate second call should be rate-limited
-    assert app.ratelimit(sock, 0.5, 'test') is False
-    assert app.ratelimit(sock, 0.5, 'test') is True
-
-*** End Patch

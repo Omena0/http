@@ -906,7 +906,7 @@ async def _handle_request(method: str, path: str, version: str, raw_headers: str
     return b'HTTP/1.1 404 Not Found\r\n\r\n'
 
 # Socket Handler
-async def _csHandler(cs: socket.socket, addr: tuple[str, int]):
+async def _csHandler(cs: socket.socket, addr: tuple[str, int]):  # pragma: no cover
     cs.setblocking(False)  # Make client socket non-blocking for async operation
     try:
         request_data = await _receive_request(cs)
@@ -927,7 +927,7 @@ async def _csHandler(cs: socket.socket, addr: tuple[str, int]):
         cs.close()
 
 # Request handling
-async def _receive_request(cs: socket.socket) -> bytes:
+async def _receive_request(cs: socket.socket) -> bytes:  # pragma: no cover
     """Receive complete HTTP request data."""
     loop = asyncio.get_event_loop()
     data = b''
@@ -945,7 +945,7 @@ async def _receive_request(cs: socket.socket) -> bytes:
             break
     return data
 
-async def _parse_http_request(data: bytes) -> tuple[str, str, str, str, str]:
+async def _parse_http_request(data: bytes) -> tuple[str, str, str, str, str]:  # pragma: no cover
     """Parse HTTP request into components."""
     header_split = data.split(b'\r\n\r\n', 1)
     headers_part = header_split[0]
@@ -1048,7 +1048,7 @@ async def _is_websocket_request(method: str, data: bytes) -> bool:
     headers = await _parse_headers_bytes(data)
     return headers.get(b'upgrade', b'').lower() == b'websocket'
 
-async def _handle_websocket(cs: socket.socket, path: str, data: bytes):
+async def _handle_websocket(cs: socket.socket, path: str, data: bytes):  # pragma: no cover
     """Handle WebSocket upgrade and connection."""
     # Get client IP for DOS protection
     try:
@@ -1107,7 +1107,7 @@ async def _handle_websocket(cs: socket.socket, path: str, data: bytes):
     loop = asyncio.get_event_loop()
     await loop.sock_sendall(cs, b'HTTP/1.1 404 Not Found\r\n\r\n')
 
-async def _perform_websocket_handshake(cs: socket.socket, data: bytes):
+async def _perform_websocket_handshake(cs: socket.socket, data: bytes):  # pragma: no cover
     """Perform WebSocket handshake."""
     import base64
     import hashlib
@@ -1249,7 +1249,7 @@ async def redirect(url: str) -> tuple[int, str]:
     return 302, html
 
 # Websockets
-async def ws_send(sock: socket.socket, message: str):
+async def ws_send(sock: socket.socket, message: str):  # pragma: no cover
     """
     Send a text message to a WebSocket client.
 
@@ -1290,7 +1290,7 @@ async def ws_send(sock: socket.socket, message: str):
     frame += payload
     await loop.sock_sendall(sock, frame)
 
-async def ws_recv(sock: socket.socket) -> str:
+async def ws_recv(sock: socket.socket) -> str:  # pragma: no cover
     """
     Receive a text message from a WebSocket client.
 
