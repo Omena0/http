@@ -1,6 +1,9 @@
 
 # httplib
 
+[![pytest](https://github.com/Omena0/http/actions/workflows/pytest.yml/badge.svg)](https://github.com/Omena0/http/actions/workflows/pytest.yml)
+[![codecov](https://codecov.io/gh/Omena0/http/branch/master/graph/badge.svg?token=)](https://codecov.io/gh/Omena0/http)
+
 Simple, asynchronous, dependency-free, strictly-typed, fully docstringed HTTP server framework.
 
 ## Example

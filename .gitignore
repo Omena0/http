@@ -1,0 +1,12 @@
+examples/chat/users.json
+*.pyc
+*.pyd
+*__*
+*-info*
+dist
+*cache
+*.gz
+*.whl
+dist/
+*.egg-info/
+.coverage

@@ -360,6 +360,7 @@ user_sockets: dict[str, app.socket.socket] = {}  # username -> socket mapping
 @app.ratelimit(10, 50)
 @app.route('/api/chat', method='ws')
 async def websocket(sock: app.socket.socket):
+    # sourcery skip: remove-unnecessary-cast
     # Get session token from the first message (should be the session token)
     session_token = await app.ws_recv(sock)
 

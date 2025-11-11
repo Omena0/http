@@ -1,0 +1,274 @@
+name: Build
+
+on: push
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+permissions:
+  contents: read
+
+jobs:
+  ensure-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.detect.outputs.should_build }}
+  # pyhttplib_version and release_display_name are computed in the build job
+  # to keep version logic centralized in scripts/get_version.py
+    # This job needs write permissions to push tags back to the repository
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure release has a tag
+        id: ensure_tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          echo "Release tag (from event): '$RELEASE_TAG'"
+
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "Release already has tag: $RELEASE_TAG"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Reuse the same detection logic the later step uses to find a candidate
+          FOUND=0
+          TAG=""
+          for commit in $(git rev-list --max-count=200 HEAD); do
+            msg=$(git log -1 --pretty=%B "$commit" | sed -n '1p' | tr -d '\r')
+            if echo "$msg" | grep -q "-"; then
+              candidate=$(echo "$msg" | cut -d'-' -f1 | tr -d '[:space:]')
+              if echo "$candidate" | grep -E -q '^[0-9]+[A-Za-z]?$'; then
+                FOUND=1
+                TAG="$candidate"
+                break
+              fi
+            fi
+          done
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No matching commit found; should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found tag candidate from commits: $TAG"
+
+          # Push tag only if it doesn't exist remotely
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists on remote"
+          else
+            echo "Creating tag: $TAG"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Tag for release $TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          # Export the chosen tag as a step output so later steps can use it
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Detect release candidate in commits
+        id: detect
+        run: |
+          set -euo pipefail
+          # If CI explicitly sets PYHTTPLIB_VERSION, build
+          if [ -n "${PYHTTPLIB_VERSION-}" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FOUND=0
+          for commit in $(git rev-list --max-count=200 HEAD); do
+            msg=$(git log -1 --pretty=%B "$commit" | sed -n '1p' | tr -d '\r')
+            if echo "$msg" | grep -q "-"; then
+              candidate=$(echo "$msg" | cut -d'-' -f1 | tr -d '[:space:]')
+              if echo "$candidate" | grep -E -q '^[0-9]+[A-Za-z]?$'; then
+                FOUND=1
+                break
+              fi
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The numeric package version is determined in the build job using
+      # scripts/get_version.py; removing the set_version step keeps the
+      # ensure-tag job focused on tagging only and avoids cross-job
+      # heredoc/python invocation complexity.
+
+  build:
+    runs-on: ubuntu-latest
+    needs:
+      - ensure-tag
+    if: needs.ensure-tag.outputs.should_build == 'true'
+    outputs:
+      pyhttplib_version: ${{ steps.get_version.outputs.pyhttplib_version }}
+      release_display_name: ${{ steps.get_version.outputs.release_display_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Determine package version
+        id: get_version
+        run: |
+          set -euo pipefail
+          python -c "from scripts.get_version import get_pyhttplib_version,get_release_display_name; print(get_pyhttplib_version()); print(get_release_display_name())" > /tmp/_vers
+          echo "pyhttplib_version=$(sed -n '1p' /tmp/_vers)" >> "$GITHUB_OUTPUT"
+          echo "release_display_name=$(sed -n '2p' /tmp/_vers)" >> "$GITHUB_OUTPUT"
+
+      - name: Log resolved version
+        run: |
+          set -euo pipefail
+          echo "Resolved PYHTTPLIB_VERSION=${{ steps.get_version.outputs.pyhttplib_version }}"
+          echo "Resolved RELEASE_DISPLAY_NAME=${{ steps.get_version.outputs.release_display_name }}"
+          # Append to the GitHub Actions job summary for quick visibility
+          if [ -n "${GITHUB_STEP_SUMMARY-}" ]; then
+            echo "### pyhttplib version info" >> "$GITHUB_STEP_SUMMARY"
+            echo "* PYHTTPLIB_VERSION: ${{ steps.get_version.outputs.pyhttplib_version }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "* RELEASE_DISPLAY_NAME: ${{ steps.get_version.outputs.release_display_name }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build release distributions
+        run: |
+          set -euo pipefail
+          # Clean any previous build artifacts so we don't upload stale packages
+          rm -rf dist || true
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    if: needs.build.result == 'success' && needs.ensure-tag.outputs.should_build == 'true'
+
+    # Dedicated environments with protections for publishing are strongly recommended.
+    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
+    environment:
+      name: pypi
+      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
+      url: https://pypi.org/project/pyhttplib
+      #
+      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
+      # ALTERNATIVE: exactly, uncomment the following line instead:
+      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine version and check PyPI
+        id: check_pypi
+        run: |
+          set -euo pipefail
+          # Prefer the canonical version discovered during the build job.
+          if [ -n "${{ needs.build.outputs.pyhttplib_version }}" ]; then
+            VER="${{ needs.build.outputs.pyhttplib_version }}"
+            echo "Using version from build job: $VER"
+          else
+            # Fall back to inferring from the sdist filename
+            SDIST=$(ls dist/*.tar.gz 2>/dev/null | head -n 1 || true)
+            if [ -z "$SDIST" ]; then
+              echo "No sdist found in dist/; cannot determine version" >&2
+              echo "skip_publish=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            FNAME=$(basename "$SDIST")
+            VER=$(echo "$FNAME" | sed -E 's/^[Pp][Yy][Hh][Tt][Tt][Pp][Ll][Ii][Bb]-//; s/\.tar\.gz$//')
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Version to publish: $VER"
+
+          # Query PyPI for the version; 200 means it already exists.
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/pyhttplib/$VER/json" || true)
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VER already exists on PyPI; skipping publish"
+            echo "skip_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clean dist directory
+        if: steps.check_pypi.outputs.skip_publish != 'true'
+        run: |
+          set -euo pipefail
+          rm -rf dist || true
+
+      - name: Retrieve release distributions
+        if: steps.check_pypi.outputs.skip_publish != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+
+      - name: Select latest artifact and prune others
+        if: steps.check_pypi.outputs.skip_publish != 'true'
+        run: |
+          set -euo pipefail
+          echo "Listing dist contents before selection:"
+          ls -l dist || true
+
+          # Find newest sdist by modification time
+          SDIST=$(ls -t dist/*.tar.gz 2>/dev/null | head -n 1 || true)
+          if [ -z "$SDIST" ]; then
+            echo "No sdist found in dist/; nothing to publish" >&2
+            ls -l dist || true
+            exit 1
+          fi
+
+          echo "Selected sdist: $SDIST"
+          FNAME=$(basename "$SDIST")
+          # Normalize project name prefix and strip .tar.gz to obtain version
+          VER=$(echo "$FNAME" | sed -E 's/^[Pp][Yy]?[Nn]?[Ee]?[Tt]?[Ss]?[Pp]?[Ll]?[Ii]?[Tt]-//; s/\.tar\.gz$//')
+          echo "Determined version: $VER"
+
+          # Remove other sdists not matching the selected version
+          for f in dist/*.tar.gz; do
+            if [ -f "$f" ] && [ "$f" != "$SDIST" ]; then
+              echo "Removing extra sdist: $f"
+              rm -f "$f"
+            fi
+          done
+
+          echo "dist/ contents after pruning:"
+          ls -l dist || true
+
+      - name: Prune wheels by METADATA Version
+        if: steps.check_pypi.outputs.skip_publish != 'true'
+        env:
+          SELECTED_VER: ${{ steps.check_pypi.outputs.version }}
+        run: |
+          set -euo pipefail
+          python scripts/prune_wheels.py
+
+      - name: Publish to PyPI (OIDC)
+        if: steps.check_pypi.outputs.skip_publish != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

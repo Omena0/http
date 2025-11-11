@@ -1,0 +1,48 @@
+name: pytest
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-asyncio coverage codecov
+
+    - name: Run tests with coverage
+      run: |
+        python -m coverage run -m pytest
+        python -m coverage xml -o coverage.xml
+        python -m coverage report -m
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        # Upload the generated coverage.xml. For public repos a token is
+        # not required, but you can add CODECOV_TOKEN as a secret if needed.
+        files: ./coverage.xml
+        # Add a flag/name so uploads are easy to identify in Codecov UI
+        flags: unittests
+        name: pytest-coverage
+        # Do not fail the CI if upload to Codecov has an issue (helps debug badge problems)
+        fail_ci_if_error: false
+
+    - name: Show coverage.xml (first 40 lines)  # helps debug Codecov uploads
+      if: always()
+      run: |
+        echo '--- coverage.xml (preview) ---'
+        head -n 40 coverage.xml || true

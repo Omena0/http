@@ -236,10 +236,10 @@ async def _normalize_path(path: str) -> str:
     # Ensure path starts with /static unless already present
     if not path.removeprefix('/').startswith('static/'):
         # Remove leading slash to avoid double slash
-        path = '/static' + (path if path.startswith('/') else '/' + path)
+        path = '/static' + (path if path.startswith('/') else f'/{path}')
 
     # Ensure .html extension
-    if not '.' in path:
+    if '.' not in path:
         path += '.html'
 
     return path.removeprefix('/')
@@ -506,7 +506,7 @@ def get_client_ip() -> str:
 
         # Fallback to a default
         return 'unknown'
-    except:
+    except Exception:
         return 'unknown'
 
 def is_ip_blocked(ip: str) -> bool:
@@ -597,7 +597,7 @@ def count_websocket_connections(ip: str) -> int:
                 peer_addr = sock.getpeername()
                 if peer_addr and peer_addr[0] == ip:
                     count += 1
-            except:
+            except Exception:
                 # Socket might be closed, ignore
                 pass
     return count
@@ -708,7 +708,7 @@ def _check_websocket_dos_protection(sock: socket.socket) -> bool:
     try:
         client_addr = sock.getpeername()
         client_ip = client_addr[0] if client_addr else 'unknown'
-    except:
+    except Exception:
         client_ip = 'unknown'
 
     # Check if IP is globally blocked
@@ -763,10 +763,8 @@ def _check_websocket_dos_protection(sock: socket.socket) -> bool:
         ws_last_message[sock] = current_time
 
         # Reduce violation count on good behavior (every 10 good messages)
-        if ws_dos_violations[sock] > 0 and message_count <= 3:
-            # Good behavior - reduce violation count slightly
-            if int(current_time) % 10 == 0:  # Every ~10 seconds of good behavior
-                ws_dos_violations[sock] = max(0, ws_dos_violations[sock] - 1)
+        if ws_dos_violations[sock] > 0 and message_count <= 3 and int(current_time) % 10 == 0:
+            ws_dos_violations[sock] = max(0, ws_dos_violations[sock] - 1)
 
     return False  # Allow message
 
@@ -798,6 +796,7 @@ async def _handle_request(method: str, path: str, version: str, raw_headers: str
     req.body = body
     req.client_ip = client_ip
 
+    # Iter routes
     for route_path, route_method, func in routes:
         # Only handle non-WebSocket routes here
         if route_method == method.upper() and route_method != 'ws':
@@ -870,18 +869,6 @@ async def _handle_request(method: str, path: str, version: str, raw_headers: str
                 # Reset response context after building response
                 _response_ctx.response = Response()
                 return header + content
-
-    # If no route matched, check for static file
-    static_path = await _normalize_path(path)
-    if os.path.exists(static_path) and os.path.isfile(static_path):
-        with open(static_path, 'rb') as f:
-            content = f.read()
-        content_type = await get_content_type(static_path)
-        header = await _build_response(200, content_type)
-
-        # Reset response context after building response
-        _response_ctx.response = Response()
-        return header + content
 
     # 404 Not Found
     status_code = 404
@@ -1067,7 +1054,7 @@ async def _handle_websocket(cs: socket.socket, path: str, data: bytes):
     try:
         client_addr = cs.getpeername()
         client_ip = client_addr[0] if client_addr else 'unknown'
-    except:
+    except Exception:
         client_ip = 'unknown'
 
     # DOS Protection - check if IP is blocked
@@ -1143,7 +1130,7 @@ async def _perform_websocket_handshake(cs: socket.socket, data: bytes):
     await loop.sock_sendall(cs, handshake_response)
 
 # Main loop
-async def _serve(ip:str, port:int):
+async def _serve(ip:str, port:int):  # pragma: no cover - server main loop
     s.bind((ip, port))
     s.listen(5)
     s.setblocking(False)  # Make socket non-blocking for async operation
@@ -1364,7 +1351,6 @@ async def ws_recv(sock: socket.socket) -> str:
                 if not byte_data:
                     break
                 payload.append(byte_data[0] ^ mask[i % 4])
-            return payload.decode('utf-8')
         else:
             # Not masked (server to client)
             if length == 126:
@@ -1374,7 +1360,7 @@ async def ws_recv(sock: socket.socket) -> str:
                 ext = await loop.sock_recv(sock, 8)
                 length = int.from_bytes(ext, 'big')
             payload = await loop.sock_recv(sock, length)
-            return payload.decode('utf-8')
+        return payload.decode('utf-8')
     except Exception:
         # Connection error - clean up DOS tracking
         _cleanup_websocket_dos_tracking(sock)
@@ -1440,8 +1426,7 @@ async def ws_broadcast(route: str, data: str):
 # Password & login utils
 def _hash(password: str, iterations: int = 100_000) -> bytes:
     salt = b'\xc2\x10\x9c\xa1S?\xc4\xd1{H\x86\x9dD\xdd\x8f\xc2'
-    dk = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iterations)
-    return dk
+    return hashlib.pbkdf2_hmac('sha256', password.encode(), salt, iterations)
 
 def _check(password: str, stored_hash: bytes, iterations: int = 100_000) -> bool:
     salt = b'\xc2\x10\x9c\xa1S?\xc4\xd1{H\x86\x9dD\xdd\x8f\xc2'
@@ -1937,7 +1922,7 @@ def ratelimit(sock: socket.socket, rate_params: tuple[Union[int, float], Union[i
 def ratelimit(*args: Any, **kwargs: Any) -> Union[Callable[[F], F], bool]:
     """Docstrings are in the overloads, dont add one here!"""
     # Parse arguments based on first argument type
-    if len(args) > 0 and isinstance(args[0], socket.socket):
+    if args and isinstance(args[0], socket.socket):
         # WebSocket function mode: ratelimit(sock, (num_req, reset_interval), identifier="")
         sock = args[0]
         rate_params = args[1] if len(args) > 1 else (1.0, -1)
@@ -1967,7 +1952,7 @@ def ratelimit(*args: Any, **kwargs: Any) -> Union[Callable[[F], F], bool]:
         try:
             client_addr = sock.getpeername()
             client_ip = client_addr[0] if client_addr else 'unknown'
-        except:
+        except Exception:
             client_ip = 'unknown'
 
         # DOS Protection - check if IP is blocked
@@ -2015,7 +2000,7 @@ def ratelimit(*args: Any, **kwargs: Any) -> Union[Callable[[F], F], bool]:
                 return False  # Not rate limited
     else:
         # Decorator mode: ratelimit(num_req, reset_interval=-1)
-        num_req = float(args[0]) if len(args) > 0 else 1.0
+        num_req = float(args[0]) if args else 1.0
         reset_interval = float(args[1]) if len(args) > 1 else -1.0
 
         def decorator(func: F) -> F:
@@ -2085,6 +2070,7 @@ def ratelimit(*args: Any, **kwargs: Any) -> Union[Callable[[F], F], bool]:
                 return await func(*args, **kwargs)
 
             return wrapper  # type: ignore
+
         return decorator
 
 __all__ = [
